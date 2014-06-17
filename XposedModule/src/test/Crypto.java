@@ -47,21 +47,12 @@ public class Crypto implements IXposedHookLoadPackage {
 				XposedBridge.log("android client connect");
 				Socket clientSocket = (Socket) param.thisObject;
 
-				XposedBridge.log("before");
-				OutputStream os = clientSocket.getOutputStream();
-				InputStream is = clientSocket.getInputStream();
-				XposedBridge.log("after");
-
 				/* debugging */
 				XposedBridge.log(Integer
 						.valueOf(clientSocket.getPort()).toString());
 
 				DiffieHellman dh = new DiffieHellman(clientSocket);
 				dh.negociate();
-
-				/* debugging */
-				String key = dh.getKey().toString(16);
-				XposedBridge.log(key);
 
 				AES aes = new AES(clientSocket);
 				aes.setDhmKey(dh.getKey());
@@ -76,12 +67,14 @@ public class Crypto implements IXposedHookLoadPackage {
 				Streams stream = new Streams(isCrypt, osCrypt);
 				keys.put(Integer.valueOf(clientSocket.getPort()),
 							stream);
+				/* debugging */
+				String md5S = aes.getIVString();
+				XposedBridge.log("md5 on DH Key: " + md5S);
 				
 				uOs = findAndHookMethod("java.net.Socket", lpparam.classLoader, "getOutputStream", new XC_MethodReplacement() {
 					@Override
 					protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
 						/* debugging */
-						XposedBridge.log("In my getOutputStream");
 						Object clientSocketObj = param.thisObject;
 
 						if (clientSocketObj != null) {
@@ -100,7 +93,6 @@ public class Crypto implements IXposedHookLoadPackage {
 					@Override
 					protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
 						/* debugging */
-						XposedBridge.log("In my getInputStream");
 						Object clientSocketObj = param.thisObject;
 
 						if (clientSocketObj != null) {
