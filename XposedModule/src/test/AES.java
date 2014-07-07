@@ -11,8 +11,9 @@ import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.spec.AlgorithmParameterSpec;
+import java.text.NumberFormat;
+import java.text.ParseException;
 import java.util.Arrays;
-import java.util.InputMismatchException;
 import java.util.Scanner;
 
 import javax.crypto.BadPaddingException;
@@ -37,19 +38,19 @@ public class AES {
 	private MessageDigest md;
 	private AlgorithmParameterSpec IVSpec;
 	
-	private byte[] headerModified, headerClean, md5Header, buf, IV, sizesByte,
-				bufW;
+	private byte[] headerModified, headerClean, md5Header, buf, IV, sizesByte;
 	private int PAYLOAD_SIZE, ALIGN_SIZE, MD5_SIZE, FLAG_SIZE, MD5_OFFSET_M;
 	private int newPayloadSize, remainingSize, flag, offset;
 	private int bufSize, bufferedSize, transferredBytes, payloadSize, alignSize,
 	 			headerCleanSize;
 	private int bufSizeW, bufferedSizeW, newSizeW, newBufferedSizeW, alignSizeW, 
-				modifiedLenW, totalSizeW, offsetW, sendSizeW;
+				modifiedLenW, offsetW, sendSizeW;
+	private int newSize, totalSize;
 	
 	public AES(Socket socket) {
 		this.socket = socket;
-		PAYLOAD_SIZE = 8;
-		ALIGN_SIZE = 8;
+		PAYLOAD_SIZE = 5;
+		ALIGN_SIZE = 2;
 		MD5_SIZE = 16;
 		FLAG_SIZE = 1;
 		MD5_OFFSET_M = FLAG_SIZE + PAYLOAD_SIZE + ALIGN_SIZE + MD5_SIZE;
@@ -107,16 +108,16 @@ public class AES {
 		cypherDecrypt.init(Cipher.DECRYPT_MODE, skeySpec, getIVSpec());
 	}
 	
-	public int write(byte[] bW, int offW, int lenW) throws IOException {
-		int smaller_bufW = 0;
+	public int write(byte[] b, int off, int len) throws IOException {
+		int smaller_buf = 0;
 		
 		/* make len divisible by 16 for AES */
-		if ((lenW % 16) != 0) {
-			newSizeW = roundUp(lenW, 16);
-			alignSizeW = newSizeW - lenW;
+		if ((len % 16) != 0) {
+			newSizeW = roundUp(len, 16);
+			alignSizeW = newSizeW - len;
 		}
 		else {
-			newSizeW = lenW;
+			newSizeW = len;
 			alignSizeW = 0;
 		}
 		
@@ -125,35 +126,35 @@ public class AES {
 		if (bufSizeW == 0 || (bufferedSizeW != newBufferedSizeW)) {
 			modifiedLenW = 1;
 			if ((bufSizeW != 0) && (newBufferedSizeW < bufferedSizeW))
-				smaller_bufW = 1;
-			totalSizeW = MD5_OFFSET_M + newSizeW;
-			bufW = new byte[totalSizeW];
-			bufSizeW = totalSizeW;
+				smaller_buf = 1;
+			totalSize = MD5_OFFSET_M + newSizeW;
+			buf = new byte[totalSize];
+			bufSizeW = totalSize;
 			bufferedSizeW = newBufferedSizeW;
 		}
 		
-		totalSizeW = bufSizeW;
+		totalSize = bufSizeW;
 
-		Arrays.fill(bufW, (byte)0x00);		
-		if (modifiedLenW== 0) {
+		Arrays.fill(buf, (byte)0x00);		
+		if (modifiedLenW == 0) {
 			offsetW = FLAG_SIZE + MD5_SIZE;
-			bufW[0] = 0x30;
-			sendSizeW = totalSizeW - PAYLOAD_SIZE - ALIGN_SIZE;
+			buf[0] = 0x30;
+			sendSizeW = totalSize - PAYLOAD_SIZE - ALIGN_SIZE;
 		}
 		else {
 			offsetW = MD5_OFFSET_M;
 			String sizes = String.format("%d%d %d", 1, newSizeW, alignSizeW);
 			sizesByte = sizes.getBytes();
-			System.arraycopy(sizesByte, 0, bufW, 0, sizesByte.length);
-			sendSizeW = totalSizeW;
+			System.arraycopy(sizesByte, 0, buf, 0, sizesByte.length);
+			sendSizeW = totalSize;
 		}
 		
-		System.arraycopy(bW, 0, bufW, offsetW, lenW);
-		md.update(bufW, offsetW, newSizeW);
-		System.arraycopy(md.digest(), 0, bufW, offsetW - MD5_SIZE, MD5_SIZE);
+		System.arraycopy(b, 0, buf, offsetW, len);
+		md.update(buf, offsetW, newSizeW);
+		System.arraycopy(md.digest(), 0, buf, offsetW - MD5_SIZE, MD5_SIZE);
 		
 		try {
-			cipher.doFinal(bufW, offsetW, newSizeW, bufW, offsetW);
+			cipher.doFinal(buf, offsetW, newSizeW, buf, offsetW);
 		} catch (ShortBufferException e) {
 			e.printStackTrace();
 			throw new IOException();
@@ -165,10 +166,11 @@ public class AES {
 			throw new IOException();
 		}
 		
-		outputStream.write(bufW, 0, sendSizeW);
-		if (smaller_bufW == 1) 
-			inputStream.read();
-		return lenW;
+		outputStream.write(buf, 0, sendSizeW);
+		if (smaller_buf == 1) 
+			socket.getInputStream().read();
+		
+		return len;
 	}
 
 	public int read(byte[] b, int off, int len) throws IOException {
@@ -180,12 +182,13 @@ public class AES {
 				if (ret < 0)
 					return ret;
 				System.arraycopy(headerModified, MD5_OFFSET_M - MD5_SIZE,
-												md5Header, 0, MD5_SIZE);
+								md5Header, 0, MD5_SIZE);
 				setPayloadAlignSize(headerModified);
 				offset = 0;
 				buf = new byte[payloadSize + headerCleanSize];
 				bufSize = payloadSize + headerCleanSize;
 			}
+			
 			remainingSize = bufSize - flag * headerCleanSize;
 			ret = readAll(buf, 0, remainingSize, 1);
 			if (ret == -1)
@@ -197,9 +200,8 @@ public class AES {
 				/* consider that we receive a clean packet */
 				System.arraycopy(buf, 0, headerClean, 0, headerCleanSize);
 				
-				if (headerClean[0] == (byte)0x30) {
+				if (headerClean[0] == (byte)0x30) 
 					System.arraycopy(buf, FLAG_SIZE, md5Header, 0, MD5_SIZE);
-				}
 				else {
 					setPayloadAlignSize(headerClean);
 					remainingSize = payloadSize  + MD5_OFFSET_M - bufSize;
@@ -216,13 +218,13 @@ public class AES {
 						bufSize = payloadSize + headerCleanSize;
 						buf = new byte[bufSize];
 						System.arraycopy(tempBuf, MD5_OFFSET_M - MD5_SIZE , 
-													md5Header, 0, MD5_SIZE);
+										md5Header, 0, MD5_SIZE);
 						System.arraycopy(tempBuf, MD5_OFFSET_M, buf, 
-											FLAG_SIZE + MD5_SIZE, newPayloadSize);
+										FLAG_SIZE + MD5_SIZE, newPayloadSize);
 					}
 					else {
 						System.arraycopy(buf, MD5_OFFSET_M - MD5_SIZE, 
-													md5Header, 0, MD5_SIZE);
+										md5Header, 0, MD5_SIZE);
 						offset = MD5_OFFSET_M;
 					}
 				}
@@ -265,24 +267,24 @@ public class AES {
 	
 	
 	private void setPayloadAlignSize(byte[] headerModified) throws IOException { 
-		String decoded = new String(Arrays.copyOfRange(headerModified, FLAG_SIZE, 
-													headerModifiedSize), "UTF-8");
-		scanner = new Scanner(decoded);
+		String  payloadSizeS = new String(Arrays.copyOfRange(headerModified, FLAG_SIZE, 
+				FLAG_SIZE + PAYLOAD_SIZE), "UTF-8");
+		String alignSizeS = new String(Arrays.copyOfRange(headerModified, FLAG_SIZE + PAYLOAD_SIZE, 
+				FLAG_SIZE + PAYLOAD_SIZE + ALIGN_SIZE), "UTF-8");
+		
 		/* get total size and align size */
 		try {
-			payloadSize = scanner.nextInt();
-			alignSize = scanner.nextInt();
-		} catch (InputMismatchException e) {
-			Log.e("header", "corrupt");
+			payloadSize = ((Number)NumberFormat.getInstance().parse(payloadSizeS)).intValue();
+			alignSize = ((Number)NumberFormat.getInstance().parse(alignSizeS)).intValue();
+		} catch (ParseException e) {
 			e.printStackTrace();
 			throw new IOException();
-		} finally {
-			scanner.close();
 		}
 	}
 	
 	private int readAll(byte[] b, int off, int totalSize, int checkLast) 
 			throws IOException {
+	
 		int received = 0, realSize = 0, smallerBuf = 0;
 		ret = 0;
 		
@@ -291,36 +293,38 @@ public class AES {
 			if (received == -1) {
 				if (ret == 0)
 					return -1;
-				else
+				else {
+					
 					return ret;
+				}
 			}
 			ret += received;
+			
 			if ((checkLast == 1) && (ret > (FLAG_SIZE + PAYLOAD_SIZE))) {
 				if (b[0] == 0x31) {
-					String decoded = new String(Arrays.copyOfRange(b, FLAG_SIZE, 
-											FLAG_SIZE + PAYLOAD_SIZE), "UTF-8");
-					scanner = new Scanner(decoded);
+					String realSizeS = new String(Arrays.copyOfRange(b, FLAG_SIZE, 
+							FLAG_SIZE + PAYLOAD_SIZE), "UTF-8");
+					
 					try {
-						realSize = scanner.nextInt();
-					} catch (InputMismatchException e) {
-						Log.e("header", "corrupt");
-						e.printStackTrace();
+						realSize = ((Number)NumberFormat.getInstance().parse(realSizeS)).intValue();
+					} catch (ParseException e) {
+						// TODO Auto-generated catch block
+						Log.e("real", realSizeS);
 						throw new IOException();
-					} finally {
-						scanner.close();
 					}
 					
 					realSize += headerModifiedSize;
 					if (realSize < totalSize)
 						smallerBuf = 1;
-					checkLast = 0;
 				}
+				checkLast = 0;
 			}	
 			if ((smallerBuf == 1) && (realSize == ret)) {
 				outputStream.write(0x00);
 				return ret;
 			}
-		}
+		}	
+		
 		return ret;
 	}
 	
